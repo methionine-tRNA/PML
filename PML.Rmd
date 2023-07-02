@@ -1,0 +1,108 @@
+---
+title: "PML Project"
+output: html_document
+date: "2023-06-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(caret)
+library(corrplot)
+```
+
+## Missing data
+
+We can see that there is a lot of missing data in some variables (>95%), so I will exclude these variables.
+
+```{r missing}
+training <- read.csv("pml-training.csv")
+training[training==""] <- NA
+missing <- data.frame(sapply(training, function(x) {sum(is.na(x))/nrow(training)}))
+select <- rownames(missing)[which(missing[, 1] < 0.95)]
+training <- tibble(select(training, c(any_of(select))))
+training$classe <- factor(training$classe)
+```
+
+## Feature Selection
+
+I exclude obviously unrelated variables, such as timestamps.
+
+```{r timestamps}
+training <- select(training, c(-"X", -"raw_timestamp_part_1", -"raw_timestamp_part_2", -"cvtd_timestamp"))
+```
+
+I plot the features to see any variables that might stick out.
+
+```{r featurePlot}
+featurePlot(training[, 1:55], training$classe)
+```
+
+Not many variables seem to correlate well with classe, so I proceed with the machine learning model.
+
+First, I divide the dataset into testing ang training sets.
+
+```{r partition}
+partition <- createDataPartition(y = training$classe, p = 0.75, list = FALSE)
+training <- training[partition, ]
+testing <- training[-partition, ]
+```
+
+I try a CART model, which is advantageous for its interpretability.
+
+```{r cart}
+cart <- train(classe ~ .-classe, data = training,
+        method = "rpart", tuneLength = 50, 
+        metric = "Accuracy",
+        trControl = trainControl(method = "repeatedcv",
+                                 number = 10,
+                                 repeats = 3,
+                                 summaryFunction = multiClassSummary,
+                                 classProbs = FALSE))
+
+confusionMatrix(predict(cart, newdata = testing), reference = testing$classe)
+```
+
+Cross validation was done using 10-fold cross validation, repeated 3 times across 50 parameters. We see that the CART model already has a good accuracy (>90%).
+
+Since some features have a high correlation with each other (see Appendix), I try to preprocess the data with PCA.
+
+```{r cartpre}
+cartPre <- train(classe ~ .-classe, data = training,
+        method = "rpart", tuneLength = 50, 
+        metric = "Accuracy", preProcess = "pca",
+        trControl = trainControl(method = "repeatedcv",
+                                 number = 10,
+                                 repeats = 3,
+                                 summaryFunction = multiClassSummary,
+                                 classProbs = FALSE))
+
+confusionMatrix(predict(cartPre, newdata = testing), reference = testing$classe)
+```
+
+Cross validation was also done using 10-fold cross validation, repeated 3 times across 50 parameters. We see that the accuracy of the preprocessed CART is considerably lower, so I will keep the non-preprocessed model.
+
+I try a random forest model, which may give a better accuracy than CART.
+
+```{r rf}
+rf <- train(classe ~ .-classe, data = training,
+        method = "rf", tuneLength = 5, 
+        metric = "Accuracy",
+        trControl = trainControl(method = "repeatedcv",
+                                 number = 5,
+                                 repeats = 1,
+                                 summaryFunction = multiClassSummary,
+                                 classProbs = FALSE))
+
+confusionMatrix(predict(rf, newdata = testing), reference = testing$classe)
+```
+
+Cross validation was done using 5-fold cross validation, across 5 parameters and only 1 repeat as computationally it takes much longer than CART. We see that the accuracy is 1, so I conclude that a random forest model is sufficient to predict the classe variable. Since the accuracy is 1 when predicting against the testing set, the expected out of sample error is zero.
+
+## Appendix
+
+This is a correlation plot to see correlation between variables.
+
+```{r appendix}
+corrplot(cor(training[3:55]))
+```
